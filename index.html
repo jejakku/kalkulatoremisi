@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JejakKu - Kalkulator Emisi Karbon</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Inter dari Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        /* Terapkan font Inter ke seluruh elemen body dan pastikan tidak ada margin/padding default */
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box; /* Pastikan padding dan border termasuk dalam total lebar/tinggi */
+            transition: background-color 0.3s ease; /* Transisi untuk perubahan background body */
+        }
+        /* Styling tambahan untuk modal agar muncul di atas segalanya */
+        .modal-overlay {
+            z-index: 1000; /* Pastikan modal di atas elemen lain */
+        }
+        .modal-content {
+            z-index: 1001; /* Pastikan konten modal di atas overlay */
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div id="app-root"></div>
+
+    <script type="text/javascript">
+        // State management sederhana
+        let electricityKWh = 0;
+        let vehicleType = 'mobil';
+        let dailyTravelKm = 0; // Input: Jarak tempuh harian
+        let travelFrequency = '21'; // Input: Frekuensi bepergian per bulan (default 21 hari/bulan)
+        let trashBagsPerWeek = 0; // Input: Jumlah kantong sampah per minggu
+        let dietType = 'daging'; // Input kembali: Pola makan
+        let totalEmissions = 0;
+        let emissionBreakdown = {};
+        let treesEquivalent = 0;
+        let staticSuggestions = '';
+        let showInfoModal = false;
+        let isDarkMode = false; // State baru untuk mode gelap
+
+        // Emission factors (simplified and example values, in kg CO2e per unit)
+        // These factors are illustrative and should be replaced with more precise, localized data for a real application.
+        const EMISSION_FACTORS = {
+            electricity: 0.5, // kg CO2e per kWh (contoh untuk grid yang banyak batubara)
+            car: 0.18,        // kg CO2e per km (contoh untuk mobil bensin)
+            motorcycle: 0.08, // kg CO2e per km (contoh untuk motor bensin)
+            publicTransport: 0.05, // kg CO2e per km (contoh untuk bus/kereta)
+            wastePerBag: 2.5, // kg CO2e per kantong sampah (asumsi 1 kantong = 5kg, faktor 0.5 kg CO2e/kg)
+            diet: {           // kg CO2e per bulan (rata-rata sederhana per kategori frekuensi)
+                daging: 250,    // Konsumsi daging tinggi
+                semiVegetarian: 150, // Konsumsi daging sesekali (Flexitarian)
+                vegetarian: 100, // Diet vegetarian
+                vegan: 50       // Diet vegan
+            }
+        };
+
+        // Faktor konversi untuk pohon: 1 pohon dewasa menyerap sekitar 21 kg CO2 per tahun
+        // Sumber: Berbagai penelitian, nilai rata-rata umum
+        const CO2_PER_TREE_PER_YEAR = 21; // kg CO2 per pohon per tahun
+
+        // Fungsi untuk memainkan efek suara
+        function playSound(soundFile) {
+            const audio = new Audio(soundFile);
+            audio.play().catch(e => console.error("Error playing sound:", e));
+        }
+
+        // Fungsi untuk mengontrol mode gelap/terang
+        function toggleDarkMode() {
+            isDarkMode = !isDarkMode;
+            updateUI(); // Perbarui UI untuk menampilkan perubahan mode
+        }
+
+        // Fungsi untuk menghasilkan saran statis berdasarkan rincian emisi
+        const getStaticSuggestions = (breakdown) => {
+            if (Object.keys(breakdown).length === 0 || totalEmissions === 0) {
+                return "Hitung jejak karbon Anda untuk mendapatkan saran personalisasi!";
+            }
+
+            let highestCategory = '';
+            let highestEmission = 0;
+
+            // Temukan kategori emisi tertinggi
+            for (const category in breakdown) {
+                if (breakdown[category] > highestEmission) {
+                    highestEmission = breakdown[category];
+                    highestCategory = category;
+                }
+            }
+
+            let suggestions = "";
+            let persuasiveMessage = "";
+
+            // Tentukan tingkat emisi untuk saran dinamis
+            if (treesEquivalent > 50) {
+                persuasiveMessage = "Jejak karbon Anda saat ini sangat tinggi. Ini adalah panggilan untuk aksi nyata! Mari kita ambil langkah besar untuk masa depan yang lebih hijau dan berkelanjutan. Setiap perubahan kecil Anda sangat berarti!";
+            } else if (treesEquivalent > 20) {
+                persuasiveMessage = "Jejak karbon Anda cukup tinggi. Dengan beberapa perubahan kebiasaan, Anda bisa membuat dampak positif yang signifikan. Mari bersama mengurangi beban bumi!";
+            } else if (treesEquivalent > 5) {
+                persuasiveMessage = "Jejak karbon Anda berada di tingkat sedang. Anda sudah berada di jalur yang benar! Teruslah berupaya dan jelajahi lebih banyak cara untuk mengurangi jejak Anda. Masa depan bumi ada di tangan kita!";
+            } else {
+                persuasiveMessage = "Selamat! Jejak karbon Anda relatif rendah. Ini adalah pencapaian yang luar biasa! Mari pertahankan kebiasaan baik ini dan terus menginspirasi orang lain untuk mengikuti jejak Anda menuju bumi yang lebih sehat!";
+            }
+
+            suggestions += `<p class="mb-4">${persuasiveMessage}</p>`;
+            suggestions += `<p class="mb-4">Berikut adalah beberapa saran untuk mengurangi jejak karbon Anda:</p>`;
+            suggestions += `<ul class="list-disc list-inside space-y-2">`;
+
+            // Tambahkan saran umum berdasarkan kategori tertinggi
+            switch (highestCategory) {
+                case 'listrik':
+                    suggestions += `<li><strong>Fokus pada penghematan energi:</strong></li>`;
+                    suggestions += `<li>- Matikan lampu dan peralatan elektronik saat tidak digunakan. <strong>Mengapa?</strong> Ini mengurangi permintaan listrik yang seringkali dihasilkan dari pembakaran bahan bakar fosil, sehingga mengurangi emisi gas rumah kaca.</li>`;
+                    suggestions += `<li>- Gunakan peralatan elektronik yang hemat energi. <strong>Mengapa?</strong> Peralatan dengan label efisiensi energi yang tinggi dirancang untuk menggunakan lebih sedikit listrik untuk fungsi yang sama, menghemat energi dan uang.</li>`;
+                    suggestions += `<li>- Gunakan energi terbarukan (jika memungkinkan). <strong>Mengapa?</strong> Beralih ke sumber seperti tenaga surya, angin, atau air mengurangi ketergantungan pada bahan bakar fosil yang menghasilkan emisi tinggi.</li>`;
+                    suggestions += `<li>- Tingkatkan efisiensi energi di rumah. <strong>Mengapa?</strong> Perbaiki insulasi rumah, gunakan alat rumah tangga yang hemat energi, dan optimalkan penggunaan AC untuk mengurangi pemborosan energi dan emisi terkait.</li>`;
+                    break;
+                case 'transportasi':
+                    suggestions += `<li><strong>Fokus pada pengurangan emisi transportasi:</strong></li>`;
+                    suggestions += `<li>- Gunakan transportasi umum lebih sering. <strong>Mengapa?</strong> Ini mengurangi penggunaan kendaraan pribadi dengan memilih bus, kereta, atau transportasi lainnya, yang memiliki emisi per penumpang lebih rendah karena efisiensi kolektif.</li>`;
+                    suggestions += `<li>- Pilih kendaraan ramah lingkungan. <strong>Mengapa?</strong> Jika memungkinkan, gunakan sepeda, jalan kaki, atau kendaraan listrik yang menghasilkan emisi lebih rendah atau nol, mengurangi polusi udara dan jejak karbon.</li>`;
+                    suggestions += `<li>- Berkendara efisien. <strong>Mengapa?</strong> Jika menggunakan kendaraan pribadi, pastikan kendaraan dalam kondisi baik dan gunakan bahan bakar yang sesuai untuk efisiensi, mengurangi gas buang dan konsumsi bahan bakar.</li>`;
+                    break;
+                case 'sampah':
+                    suggestions += `<li><strong>Fokus pada pengelolaan sampah yang lebih baik:</strong></li>`;
+                    suggestions += `<li>- Terapkan prinsip 3R (Reduce, Reuse, Recycle) untuk mengurangi limbah, terutama sampah plastik. <strong>Mengapa?</strong> Mengurangi sampah berarti lebih sedikit yang berakhir di TPA, yang menghasilkan gas metana (gas rumah kaca kuat), dan menghemat sumber daya untuk produksi barang baru.</li>`;
+                    suggestions += `<li>- Kompos sampah organik untuk pupuk. <strong>Mengapa?</strong> Sampah organik yang membusuk di TPA menghasilkan gas metana. Mengompos mengubahnya menjadi pupuk yang bermanfaat, mengurangi emisi dan meningkatkan kesuburan tanah.</li>`;
+                    break;
+                case 'makanan': // Kategori makanan kembali
+                    suggestions += `<li><strong>Fokus pada pola makan yang lebih berkelanjutan:</strong></li>`;
+                    suggestions += `<li>- Kurangi konsumsi daging merah dan produk susu. <strong>Mengapa?</strong> Produksi daging, terutama daging merah, membutuhkan lahan, air, dan pakan yang sangat banyak, serta menghasilkan gas metana yang merupakan gas rumah kaca kuat. Mengurangi konsumsi ini dapat secara signifikan menurunkan jejak karbon Anda.</li>`;
+                    suggestions += `<li>- Tingkatkan konsumsi makanan nabati, seperti sayuran, buah-buahan, dan biji-bijian. <strong>Mengapa?</strong> Makanan nabati umumnya memiliki jejak karbon yang jauh lebih rendah dibandingkan produk hewani, serta lebih sehat.</li>`;
+                    suggestions += `<li>- Beli makanan lokal dan musiman untuk mengurangi jejak transportasi. <strong>Mengapa?</strong> Makanan yang diimpor atau diangkut jauh memiliki emisi lebih tinggi dari transportasi. Memilih produk lokal mendukung petani setempat dan mengurangi emisi.</li>`;
+                    suggestions += `<li>- Hindari membuang-buang makanan. <strong>Mengapa?</strong> Makanan yang terbuang dan membusuk di TPA menghasilkan metana. Mengurangi limbah makanan menghemat sumber daya yang digunakan untuk memproduksinya dan mengurangi emisi.</li>`;
+                    break;
+                default: // Saran umum jika tidak ada kategori tertinggi spesifik atau untuk emisi rendah
+                    suggestions += `<li><strong>Gaya Hidup Ramah Lingkungan:</strong></li>`;
+                    suggestions += `<li>- Hemat energi di rumah dan tempat kerja. <strong>Mengapa?</strong> Mengurangi konsumsi energi secara keseluruhan mengurangi emisi dari pembangkit listrik yang seringkali menggunakan bahan bakar fosil.</li>`;
+                    suggestions += `<li>- Pilih transportasi yang lebih ramah lingkungan. <strong>Mengapa?</strong> Mengurangi ketergantungan pada bahan bakar fosil di kendaraan pribadi dan beralih ke pilihan yang lebih bersih seperti transportasi umum atau bersepeda.</li>`;
+                    suggestions += `<li>- Kurangi dan daur ulang sampah Anda. <strong>Mengapa?</strong> Mengurangi limbah dan mendukung ekonomi sirkular mengurangi emisi dari produksi dan pembuangan sampah.</li>`;
+                    suggestions += `<li>- Adopsi pola makan yang lebih berkelanjutan. <strong>Mengapa?</strong> Memilih makanan dengan jejak karbon rendah, seperti makanan nabati, dapat mengurangi emisi dari pertanian dan produksi pangan.</li>`;
+                    suggestions += `<li>- Dukung energi terbarukan dan inisiatif hijau di komunitas Anda. <strong>Mengapa?</strong> Mendukung transisi ke energi bersih membantu mengurangi emisi skala besar dan mendorong inovasi hijau.</li>`;
+                    suggestions += `<li>- Tanam pohon. <strong>Mengapa?</strong> Pohon menyerap karbon dioksida dari atmosfer melalui fotosintesis, membantu mengurangi konsentrasi gas rumah kaca.</li>`;
+                    suggestions += `<li>- Beli produk lokal. <strong>Mengapa?</strong> Mengurangi emisi dari transportasi barang yang diimpor atau diangkut jauh, serta mendukung ekonomi lokal.</li>`;
+                    suggestions += `<li>- Gunakan laptop daripada komputer desktop. <strong>Mengapa?</strong> Laptop umumnya memiliki konsumsi daya yang lebih rendah dibandingkan komputer desktop, menghemat energi.</li>`;
+                    suggestions += `<li>- Cetak bolak-balik dan gunakan kertas bekas. <strong>Mengapa?</strong> Menghemat kertas mengurangi kebutuhan penebangan pohon dan energi untuk produksi kertas baru, serta mengurangi limbah.</li>`;
+                    suggestions += `<li>- Optimalkan penggunaan ruang kantor. <strong>Mengapa?</strong> Menggunakan ruang secara efisien dapat mengurangi kebutuhan energi untuk penerangan, pemanasan, atau pendinginan, sehingga mengurangi emisi.</li>`;
+                    break;
+            }
+            suggestions += `</ul>`;
+            suggestions += `<p class="mt-4">Setiap langkah kecil berarti besar! Mari bersama menciptakan Indonesia bebas emisi.</p>`;
+            return suggestions;
+        };
+
+        // Fungsi untuk menghitung emisi
+        function calculateEmissions() {
+            let electricityEmissions = 0;
+            let transportEmissions = 0;
+            let wasteEmissions = 0;
+            let dietEmissions = 0; // Variabel untuk emisi makanan
+
+            // Hitung emisi listrik
+            electricityEmissions = parseFloat(electricityKWh) * EMISSION_FACTORS.electricity;
+
+            // Hitung emisi transportasi (berdasarkan jarak harian dan frekuensi bepergian)
+            const estimatedTravelDays = parseFloat(travelFrequency); // Mengambil nilai hari dari dropdown
+            const monthlyTravelKm = parseFloat(dailyTravelKm) * estimatedTravelDays;
+
+            switch (vehicleType) {
+                case 'mobil':
+                    transportEmissions = monthlyTravelKm * EMISSION_FACTORS.car;
+                    break;
+                case 'motor':
+                    transportEmissions = monthlyTravelKm * EMISSION_FACTORS.motorcycle;
+                    break;
+                case 'umum':
+                    transportEmissions = monthlyTravelKm * EMISSION_FACTORS.publicTransport;
+                    break;
+                case 'sepeda/jalan kaki':
+                    transportEmissions = 0; // Tidak ada emisi langsung
+                    break;
+                default:
+                    break;
+            }
+
+            // Hitung emisi sampah (berdasarkan kantong per minggu)
+            wasteEmissions = parseFloat(trashBagsPerWeek) * EMISSION_FACTORS.wastePerBag * 4; // Asumsi 4 minggu dalam sebulan
+
+            // Hitung emisi diet
+            dietEmissions = EMISSION_FACTORS.diet[dietType] || 0; // Hitung emisi diet
+
+            const total = electricityEmissions + transportEmissions + wasteEmissions + dietEmissions; // Total termasuk diet
+
+            totalEmissions = total;
+            emissionBreakdown = {
+                listrik: electricityEmissions,
+                transportasi: transportEmissions,
+                sampah: wasteEmissions,
+                makanan: dietEmissions, // Tambahkan emisi makanan ke breakdown
+            };
+
+            // Hitung ekuivalen pohon
+            const annualEmissions = total * 12; // Emisi tahunan
+            treesEquivalent = annualEmissions / CO2_PER_TREE_PER_YEAR;
+
+            // Set static suggestions based on new breakdown
+            staticSuggestions = getStaticSuggestions(emissionBreakdown);
+            updateUI(); // Perbarui UI setelah perhitungan
+
+            // Mainkan suara sukses setelah perhitungan
+            playSound('sounds/success.mp3'); // Ganti dengan path file suara Anda
+        }
+
+        // Fungsi untuk mengatur ulang semua input dan hasil
+        function resetCalculator() {
+            electricityKWh = 0;
+            vehicleType = 'mobil';
+            dailyTravelKm = 0;
+            travelFrequency = '21'; // Reset ke default
+            trashBagsPerWeek = 0;
+            dietType = 'daging'; // Reset ke default
+            totalEmissions = 0;
+            emissionBreakdown = {};
+            treesEquivalent = 0;
+            staticSuggestions = '';
+            updateUI(); // Perbarui UI setelah reset
+
+            // Mainkan suara reset
+            playSound('sounds/reset.mp3'); // Ganti dengan path file suara Anda
+        }
+
+        // Fungsi untuk melampirkan event listeners secara programatis
+        function attachEventListeners() {
+            // Input fields
+            document.getElementById('electricity')?.addEventListener('change', (e) => { electricityKWh = parseFloat(e.target.value) || 0; updateUI(); });
+            document.getElementById('dailyTravelKm')?.addEventListener('change', (e) => { dailyTravelKm = parseFloat(e.target.value) || 0; updateUI(); });
+            document.getElementById('travelFrequency')?.addEventListener('change', (e) => { travelFrequency = e.target.value; updateUI(); });
+            document.getElementById('vehicleType')?.addEventListener('change', (e) => { vehicleType = e.target.value; updateUI(); });
+            document.getElementById('trashBagsPerWeek')?.addEventListener('change', (e) => { trashBagsPerWeek = parseFloat(e.target.value) || 0; updateUI(); });
+            document.getElementById('diet')?.addEventListener('change', (e) => { dietType = e.target.value; updateUI(); });
+
+            // Buttons
+            document.getElementById('calculateButton')?.addEventListener('click', calculateEmissions);
+            document.getElementById('resetButton')?.addEventListener('click', resetCalculator);
+            document.getElementById('infoButton')?.addEventListener('click', () => {
+                showInfoModal = true;
+                updateUI();
+                playSound('sounds/info_pop.mp3'); // Mainkan suara saat modal dibuka
+            });
+            document.getElementById('toggleDarkModeButton')?.addEventListener('click', toggleDarkMode); // Event listener untuk tombol mode gelap/terang
+
+
+            // Modal close buttons
+            document.getElementById('modalCloseButton')?.addEventListener('click', () => {
+                showInfoModal = false;
+                updateUI();
+                playSound('sounds/info_close.mp3'); // Mainkan suara saat modal ditutup
+            });
+            document.getElementById('modalOverlayCloseButton')?.addEventListener('click', () => {
+                showInfoModal = false;
+                updateUI();
+                playSound('sounds/info_close.mp3'); // Mainkan suara saat modal ditutup
+            });
+
+            console.log("Event listeners re-attached.");
+        }
+
+        // Fungsi untuk memperbarui UI berdasarkan state
+        function updateUI() {
+            // Tentukan kelas CSS berdasarkan mode gelap/terang
+            const bodyBgClass = isDarkMode ? 'bg-gradient-to-br from-gray-950 to-gray-800' : 'bg-gradient-to-br from-emerald-50 to-blue-100';
+            const cardBgClass = isDarkMode ? 'bg-gray-800' : 'bg-white';
+            const textColorClass = isDarkMode ? 'text-gray-100' : 'text-gray-700';
+            const subTextColorClass = isDarkMode ? 'text-gray-400' : 'text-gray-600';
+            const inputBgClass = isDarkMode ? 'bg-gray-700 text-white' : 'bg-white text-gray-800';
+            const inputBorderClass = isDarkMode ? 'border-gray-600' : 'border-gray-300';
+            const resultBgClass = isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-50 border-green-200';
+            const resultTextColorClass = isDarkMode ? 'text-gray-100' : 'text-green-800';
+            const resultValueColorClass = isDarkMode ? 'text-emerald-300' : 'text-green-900';
+            const breakdownBgClass = isDarkMode ? 'bg-gray-700' : 'bg-white';
+            const breakdownTextColorClass = isDarkMode ? 'text-gray-200' : 'text-gray-700';
+            const breakdownValueColorClass = isDarkMode ? 'text-emerald-300' : 'text-green-600';
+            const treeBgClass = isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-100 border-green-300';
+            const treeTextColorClass = isDarkMode ? 'text-gray-100' : 'text-green-800';
+            const treeValueColorClass = isDarkMode ? 'text-emerald-300' : 'text-green-900';
+            const suggestionBgClass = isDarkMode ? 'bg-gray-600 border-gray-500' : 'bg-purple-50 border-purple-200';
+            const suggestionTextColorClass = isDarkMode ? 'text-gray-200' : 'text-gray-800';
+            const modalBgClass = isDarkMode ? 'bg-gray-800' : 'bg-white';
+            const modalTextColorClass = isDarkMode ? 'text-gray-200' : 'text-gray-800';
+            const modalListColorClass = isDarkMode ? 'text-gray-400' : 'text-gray-600';
+
+
+            const appHtml = `
+                <div class="${bodyBgClass} flex items-center justify-center min-h-screen p-4 w-full">
+                    <div class="${cardBgClass} p-8 rounded-2xl shadow-lg w-full max-w-2xl transform transition-all duration-300 hover:scale-[1.01] border ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}">
+                        <div class="flex items-center justify-between mb-6">
+                            <h1 class="text-4xl font-extrabold ${isDarkMode ? 'text-emerald-400' : 'text-green-700'} drop-shadow-sm">
+                                JejakKu
+                            </h1>
+                            <button id="toggleDarkModeButton" class="relative inline-flex items-center h-8 w-16 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-purple-500 ${isDarkMode ? 'bg-gray-700' : 'bg-green-500'}">
+                                <span class="sr-only">Toggle dark mode</span>
+                                <!-- Sun Icon -->
+                                <svg class="absolute left-1 top-1 w-6 h-6 text-yellow-400 transition-opacity duration-300 ${isDarkMode ? 'opacity-0' : 'opacity-100'}" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2a7 7 0 1 1 0-14 7 7 0 0 1 0 14zm0-12a1 1 0 0 1 1-1h2a1 1 0 0 1 0 2h-2a1 1 0 0 1-1-1zm0 10a1 1 0 0 1 1-1h2a1 1 0 0 1 0 2h-2a1 1 0 0 1-1-1zm6.364-10.364a1 1 0 0 1 0-1.414l1.414-1.414a1 1 0 0 1 1.414 0 1 1 0 0 1 0 1.414l-1.414 1.414a1 1 0 0 1-1.414 0zM5.636 18.364a1 1 0 0 1 0 1.414l-1.414 1.414a1 1 0 0 1-1.414 0 1 1 0 0 1 0-1.414l1.414-1.414a1 1 0 0 1 1.414 0zM12 0a1 1 0 0 1 1-1h2a1 1 0 0 1 0 2h-2a1 1 0 0 1-1-1zm0 24a1 1 0 0 1 1-1h2a1 1 0 0 1 0 2h-2a1 1 0 0 1-1-1zm-6.364-10.364a1 1 0 0 1 0-1.414l-1.414-1.414a1 1 0 0 1-1.414 0 1 1 0 0 1 0 1.414l1.414 1.414a1 1 0 0 1 1.414 0zM18.364 5.636a1 1 0 0 1 0 1.414l1.414 1.414a1 1 0 0 1 1.414 0 1 1 0 0 1 0-1.414l-1.414-1.414a1 1 0 0 1-1.414 0z"/>
+                                </svg>
+                                <!-- Moon Icon -->
+                                <svg class="absolute right-1 top-1 w-6 h-6 text-blue-300 transition-opacity duration-300 ${isDarkMode ? 'opacity-100' : 'opacity-0'}" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 2.25a9.75 9.75 0 0 0-9.75 9.75c0 5.385 4.365 9.75 9.75 9.75a9.75 9.75 0 0 0 9.75-9.75c0-5.385-4.365-9.75-9.75-9.75zm-6.25 9.75a6.25 6.25 0 0 1 6.25-6.25v12.5a6.25 6.25 0 0 1-6.25-6.25z"/>
+                                </svg>
+                                <!-- Thumb -->
+                                <span class="absolute left-1 w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 ${isDarkMode ? 'translate-x-8' : 'translate-x-0'}"></span>
+                            </button>
+                        </div>
+                        <p class="text-center ${subTextColorClass} mb-8 -mt-4">
+                            Hitung perkiraan emisi karbon Anda dan temukan cara untuk berkontribusi pada Indonesia bebas emisi!
+                        </p>
+
+                        <!-- User ID (Firebase tidak digunakan di versi satu file ini untuk kesederhanaan) -->
+                        <div class="text-sm ${subTextColorClass} text-center mb-4 p-2 ${isDarkMode ? 'bg-gray-700' : 'bg-gray-50'} rounded-lg">
+                            ID Pengguna Anda: <span class="font-mono break-all">ID_Pengguna_Anonim</span>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                            <!-- Electricity Input -->
+                            <div class="flex flex-col">
+                                <label for="electricity" class="text-lg font-semibold ${textColorClass} mb-2">
+                                    Konsumsi Listrik Bulanan (kWh):
+                                </label>
+                                <input
+                                    type="number"
+                                    id="electricity"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                    placeholder="Contoh: 200"
+                                    value="${electricityKWh}"
+                                />
+                            </div>
+
+                            <!-- Transportation Inputs -->
+                            <div class="flex flex-col">
+                                <label for="dailyTravelKm" class="text-lg font-semibold ${textColorClass} mb-2">
+                                    Jarak Tempuh Rata-rata Harian (km):
+                                </label>
+                                <input
+                                    type="number"
+                                    id="dailyTravelKm"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                    placeholder="Contoh: 10"
+                                    value="${dailyTravelKm}"
+                                />
+                                <label for="travelFrequency" class="text-lg font-semibold ${textColorClass} mb-2 mt-4">
+                                    Frekuensi Bepergian per Bulan:
+                                </label>
+                                <select
+                                    id="travelFrequency"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                >
+                                    <option value="21" ${travelFrequency === '21' ? 'selected' : ''}>Setiap Hari (20-22 hari/bulan)</option>
+                                    <option value="10" ${travelFrequency === '10' ? 'selected' : ''}>Beberapa Kali Seminggu (8-12 hari/bulan)</option>
+                                    <option value="2" ${travelFrequency === '2' ? 'selected' : ''}>Jarang (1-4 hari/bulan)</option>
+                                    <option value="0" ${travelFrequency === '0' ? 'selected' : ''}>Tidak Pernah</option>
+                                </select>
+                                <label for="vehicleType" class="text-sm ${subTextColorClass} mt-2 mb-1">
+                                    Jenis Kendaraan:
+                                </label>
+                                <select
+                                    id="vehicleType"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                >
+                                    <option value="mobil" ${vehicleType === 'mobil' ? 'selected' : ''}>Mobil Pribadi</option>
+                                    <option value="motor" ${vehicleType === 'motor' ? 'selected' : ''}>Motor Pribadi</option>
+                                    <option value="umum" ${vehicleType === 'umum' ? 'selected' : ''}>Transportasi Umum</option>
+                                    <option value="sepeda/jalan kaki" ${vehicleType === 'sepeda/jalan kaki' ? 'selected' : ''}>Sepeda/Jalan Kencang</option>
+                                </select>
+                            </div>
+
+                            <!-- Waste Input -->
+                            <div class="flex flex-col">
+                                <label for="trashBagsPerWeek" class="text-lg font-semibold ${textColorClass} mb-2">
+                                    Jumlah Kantong Sampah Rumah Tangga per Minggu:
+                                </label>
+                                <input
+                                    type="number"
+                                    id="trashBagsPerWeek"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                    placeholder="Contoh: 2"
+                                    value="${trashBagsPerWeek}"
+                                />
+                            </div>
+
+                            <!-- Diet Input -->
+                            <div class="flex flex-col">
+                                <label for="diet" class="text-lg font-semibold ${textColorClass} mb-2">
+                                    Pola Makan:
+                                </label>
+                                <select
+                                    id="diet"
+                                    class="p-3 border ${inputBorderClass} rounded-lg shadow-md focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 ${inputBgClass} w-full"
+                                >
+                                    <option value="daging" ${dietType === 'daging' ? 'selected' : ''}>Pemakan Daging (tinggi)</option>
+                                    <option value="semiVegetarian" ${dietType === 'semiVegetarian' ? 'selected' : ''}>Semi-vegetarian (Flexitarian)</option>
+                                    <option value="vegetarian" ${dietType === 'vegetarian' ? 'selected' : ''}>Vegetarian</option>
+                                    <option value="vegan" ${dietType === 'vegan' ? 'selected' : ''}>Vegan</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex flex-col sm:flex-row gap-4 justify-center mb-8">
+                            <button
+                                id="calculateButton"
+                                class="flex-1 bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75"
+                            >
+                                Hitung Emisi
+                            </button>
+                            <button
+                                id="resetButton"
+                                class="flex-1 bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg shadow-md hover:bg-gray-400 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-75"
+                            >
+                                Reset
+                            </button>
+                            <button
+                                id="infoButton"
+                                class="flex-1 bg-blue-500 text-white font-bold py-3 px-6 rounded-lg shadow-md hover:bg-blue-600 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75"
+                            >
+                                Tentang Faktor Emisi
+                            </button>
+                        </div>
+
+
+                        <!-- Results Display -->
+                        ${totalEmissions > 0 ? `
+                            <div class="${resultBgClass} p-6 rounded-xl border shadow-inner">
+                                <h2 class="text-2xl font-bold ${resultTextColorClass} mb-4 text-center">
+                                    Perkiraan Jejak Karbon Anda:
+                                </h2>
+                                <p class="text-5xl font-extrabold text-center ${resultValueColorClass} mb-6">
+                                    ${totalEmissions.toFixed(2)} kg CO2e/bulan
+                                </p>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 ${breakdownTextColorClass}">
+                                    ${Object.entries(emissionBreakdown).map(([category, value]) => `
+                                        <div class="flex justify-between items-center ${breakdownBgClass} p-3 rounded-lg shadow-sm">
+                                            <span class="font-medium capitalize">${category}:</span>
+                                            <span class="font-semibold ${breakdownValueColorClass}">${value.toFixed(2)} kg CO2e</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+
+                                <!-- Trees Equivalent Display -->
+                                <div class="mt-8 text-center ${treeBgClass} p-4 rounded-lg border">
+                                    <p class="text-lg font-semibold ${treeTextColorClass}">
+                                        Untuk mengimbangi emisi tahunan Anda, Anda perlu menanam sekitar:
+                                    </p>
+                                    <p class="text-4xl font-extrabold ${treeValueColorClass} mt-2">
+                                        ${Math.ceil(treesEquivalent)} pohon setiap tahun
+                                    </p>
+                                    <p class="text-sm ${subTextColorClass} mt-2">
+                                        (Estimasi berdasarkan 1 pohon dewasa menyerap sekitar ${CO2_PER_TREE_PER_YEAR} kg CO2 per tahun)
+                                    </p>
+                                </div>
+
+                                <p class="text-center ${subTextColorClass} mt-6 text-sm">
+                                    Angka ini adalah perkiraan berdasarkan faktor emisi standar. Hasil sebenarnya dapat bervariasi.
+                                </p>
+
+                                <!-- Static Suggestions Section -->
+                                <div class="mt-8 pt-6 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}">
+                                    <h3 class="text-2xl font-bold ${textColorClass} mb-4 text-center">
+                                        Saran Personalisasi untuk Anda
+                                    </h3>
+                                    ${staticSuggestions ? `
+                                        <div class="${suggestionBgClass} p-4 rounded-lg border ${isDarkMode ? 'border-gray-500' : 'border-purple-200'} ${suggestionTextColorClass} whitespace-pre-wrap">
+                                            ${staticSuggestions}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <!-- Info Modal -->
+                        ${showInfoModal ? `
+                            <div class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 modal-overlay">
+                                <div class="${modalBgClass} p-8 rounded-xl shadow-2xl max-w-md w-full relative modal-content">
+                                    <h3 class="text-2xl font-bold ${modalTextColorClass} mb-4">Tentang Faktor Emisi</h3>
+                                    <p class="${modalTextColorClass} mb-4">
+                                        Kalkulator ini menggunakan faktor emisi perkiraan untuk menghitung jejak karbon Anda. Faktor-faktor ini adalah nilai rata-rata global atau contoh dan mungkin tidak secara akurat mencerminkan kondisi spesifik di Indonesia atau kebiasaan pribadi Anda.
+                                    </p>
+                                    <ul class="list-disc list-inside ${modalListColorClass} mb-4">
+                                        <li><strong>Listrik:</strong> Emisi per kWh sangat bervariasi tergantung sumber energi (batu bara, gas, terbarukan).</li>
+                                        <li><strong>Transportasi:</strong> Emisi per km tergantung pada efisiensi bahan bakar kendaraan, jenis bahan bakar, dan kondisi lalu lintas.</li>
+                                        <li><strong>Sampah:</strong> Emisi dari sampah bergantung pada metode pengelolaannya (TPA, daur ulang, kompos).</li>
+                                        <li><strong>Makanan:</strong> Produksi makanan, terutama daging merah dan produk susu, membutuhkan banyak lahan, air, dan energi. Proses pencernaan hewan ternak menghasilkan gas metana, yang merupakan gas rumah kaca yang kuat. Selain itu, penggunaan pupuk untuk pakan ternak dapat melepaskan dinitrogen oksida, gas rumah kaca lain. Memilih pola makan nabati atau mengurangi konsumsi produk hewani dapat secara signifikan mengurangi jejak karbon Anda.</li>
+                                    </ul>
+                                    <p class="${modalTextColorClass} mb-6">
+                                        Untuk hasil yang lebih akurat, disarankan untuk mencari data faktor emisi yang lebih spesifik untuk wilayah Anda.
+                                    </p>
+                                    <button
+                                        id="modalCloseButton"
+                                        class="absolute top-4 right-4 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'} hover:${isDarkMode ? 'text-gray-200' : 'text-gray-700'} text-3xl font-bold"
+                                    >
+                                        &times;
+                                    </button>
+                                    <button
+                                        id="modalOverlayCloseButton"
+                                        class="w-full bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-all duration-300"
+                                    >
+                                        Tutup
+                                    </button>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            const rootElement = document.getElementById('app-root');
+            if (rootElement) {
+                rootElement.innerHTML = appHtml;
+                console.log("UI updated successfully.");
+                attachEventListeners(); // Panggil event listeners setelah HTML dirender
+            } else {
+                console.error("Elemen 'app-root' tidak ditemukan.");
+            }
+        }
+
+        // Panggil updateUI() setelah DOM sepenuhnya dimuat
+        document.addEventListener('DOMContentLoaded', updateUI);
+    </script>
+</body>
+</html>
+
